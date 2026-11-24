@@ -1,0 +1,86 @@
+# Triage a new issue on the pilot fork amptrel/amplify-flutter with the Flutter issue triage skill
+# (skills/flutter-triage/flutter-issue-triage/SKILL.md on the fork's main, the triage step's data source).
+# Port of alvazjor/aws-cdk trellis-demo .trellis/workflows/issue-triage.yaml (2026-10-28) to the current loader
+# (schemaVersion added; the demo's workflow.input is workflow.in in ${} and workflow['in'] in CEL).
+#
+# Trellis acts as the GitHub App amptrel[bot] (github.self_logins in the instance config), so its own comments and
+# label changes are self-caused and never restart this workflow; the issues varshpam opens are not self-caused, so no
+# on.self_events is needed. An installation token has no user identity: nothing here asks GitHub who it is.
+#
+# `notice` comments that the triage has started; the agent reads the issue and aws-amplify/amplify-flutter through
+# the GitHub MCP server, sets the labels and posts the triage comment on the fork issue itself. No gate: nothing is
+# reviewed before it is written (exactly the CDK demo).
+schemaVersion: 1
+version: 1
+enabled: true
+description: Tell the author the triage has started, triage the issue with the Flutter issue triage skill, then set the labels and post the triage comment on the fork issue.
+
+on:
+  platform: github
+  entity: issue
+  action: [opened, reopened]
+  filter: "workflow['in'].data.state == 'open'"
+
+steps:
+  # Tells the author, as amptrel[bot], that the triage has started, a few seconds after the issue opens.
+  - id: notice
+    kind: deterministic
+    in:
+      repo: ${workflow.in.source}
+      number: ${workflow.in.subject.number}
+      author: ${workflow.in.data.author}
+    run:
+      - |
+        gh issue comment "${in.number}" --repo "${in.repo}" --body "Hi @${in.author},
+
+        Thanks for opening this issue. We are triaging it now: we read the report, look for duplicates and existing fixes, check the Amplify Flutter source and docs for the cause, and try a quick reproduction when the issue allows it. We will reply here shortly with what we found, the next steps and the labels."
+
+  - id: triage
+    kind: agent
+    depends_on: [notice]
+    agent: strands/triager
+    instruction: |
+      Triage the GitHub issue in your inputs with the Flutter issue triage skill in your data sources:
+      read it first, then follow it as your agent instructions describe. Set the labels with github_issue_write and post the comment with
+      github_add_issue_comment, then submit every output: track, classification, priority, reproduction, labels_added and
+      labels_removed (comma separated, empty when none), summary (two or three sentences), comment
+      (the Proposed Response, the same text you posted) and report (the full triage report).
+    in:
+      owner: amptrel
+      repo: amplify-flutter
+      number: ${workflow.in.subject.number}
+      title: ${workflow.in.data.title}
+      author: ${workflow.in.data.author}
+      labels: ${workflow.in.data.labels}
+      url: ${workflow.in.subject.url}
+    data_sources:
+      - location: skills/flutter-triage/flutter-issue-triage/SKILL.md   # must exist on the fork's main before `trellis validate` passes (data source not found)
+    out:
+      track: enum[already-fixed, duplicate, feature-request-with-pr, security, build-time-bug, missing-context, full-triage]
+      classification: enum[bug, feature, docs, question, working-as-intended]
+      priority: enum[p1, p2, none]
+      reproduction: enum[reproduced, not-reproduced, not-attempted]
+      labels_added: string
+      labels_removed: string
+      summary: string
+      comment: string
+      report: artifact
+
+  # Keeps what the triage agent did: reads the agent's last attempt (mounted read-only at /trellis/transcripts),
+  # prints its tool calls to the log and keeps them, with the token counts, as outputs in the run store.
+  - id: record
+    kind: deterministic
+    depends_on: [triage]
+    out:
+      tool_calls: int
+      calls: string
+      metrics: string
+    run:
+      - |
+        a=$(ls -d /trellis/transcripts/triage/0/*/ | sort -t/ -k6 -n | tail -1)
+        t="$a/transcript.jsonl"
+        calls=$(jq -sc '[.[] | .update | select(.sessionUpdate == "tool_call" or .sessionUpdate == "tool_call_update")] | reduce .[] as $u ({order: [], by: {}}; (if .by[$u.toolCallId] == null then .order += [$u.toolCallId] else . end) | .by[$u.toolCallId] += [$u]) | .by as $b | [.order[] | $b[.] | {title: (map(.title // empty) | first), status: (map(.status // empty) | last), input: (map(.rawInput // empty) | first | tostring | .[0:300])}]' "$t")
+        echo "$calls" | jq -r '.[] | "\(.status // "-")  \(.title)  \(.input)"'
+        echo "tool_calls=$(echo "$calls" | jq length)" >> "$TRELLIS_OUTPUT"
+        echo "calls=$calls" >> "$TRELLIS_OUTPUT"
+        echo "metrics=$(jq -c . "$a/metrics.json")" >> "$TRELLIS_OUTPUT"
