@@ -1,0 +1,74 @@
+# Review a pull request into main on the pilot fork amptrel/amplify-flutter with a Strands agent. Nothing is posted
+# to GitHub: the agent writes its review as step output, a person approves it at the gate, and the last step only
+# logs the review it would post. Posting is added later.
+# Port of alvazjor/aws-cdk trellis-demo .trellis/workflows/pr-review.yaml (2026-10-28) to the current loader
+# (schemaVersion added; workflow.input is workflow.in in ${} and workflow['in'] in CEL; ${step.x.y} is
+# ${steps.x.out.y}).
+#
+# Trellis acts as the GitHub App amptrel[bot] (github.self_logins in the instance config); the pull requests varshpam
+# opens are not self-caused, so no on.self_events is needed. The reviewer has no GitHub tools and only reads its
+# checkout: nothing here asks GitHub who it is. Disabled until the pilot turns it on.
+schemaVersion: 1
+version: 1
+enabled: false
+description: Review a pull request into main with a Strands agent, hold the review at a gate, then log the review it would post.
+
+on:
+  platform: github
+  entity: pull_request
+  action: [opened, reopened, synchronize, ready_for_review]
+  branches: [main]                                 # the branch the pull request merges into
+  filter: "workflow['in'].data.state == 'open'"    # not a draft, not closed or merged
+  # The default, written out: new commits on the pull request cancel the review of the older ones.
+  concurrency:
+    group: pr-${workflow.in.subject.number}
+    policy: cancel-outdated
+
+steps:
+  - id: review
+    kind: agent
+    agent: strands/reviewer
+    instruction: |
+      Review the pull request in your inputs, as your agent instructions describe. Fill every output:
+      verdict, blocking (the number of findings that must change before merge), summary (two or
+      three sentences) and review (the review body a maintainer would post, in Markdown).
+    in:
+      number: ${workflow.in.subject.number}
+      title: ${workflow.in.data.title}
+      author: ${workflow.in.data.author}
+      base_branch: ${workflow.in.data.base_branch}
+      head_branch: ${workflow.in.data.head_branch}
+      head_sha: ${workflow.in.data.head_sha}
+      body: ${workflow.in.raw.pull_request.body}   # from the GitHub payload; validate does not check it
+      url: ${workflow.in.subject.url}
+    out:
+      verdict: enum[approve, comment, request-changes]
+      blocking: int
+      summary: string
+      review: string
+
+  # The person sees the review here and approves or rejects it in the Trellis UI.
+  - id: approve
+    kind: gate
+    depends_on: [review]
+    in:
+      pull_request: ${workflow.in.subject.url}
+      verdict: ${steps.review.out.verdict}
+      summary: ${steps.review.out.summary}
+      review: ${steps.review.out.review}
+    out:
+      outcome: enum[approve, reject]
+      feedback: string
+
+  # Runs after an approve. A reject ends the run at the gate, with the person's feedback.
+  - id: would_post
+    kind: deterministic
+    depends_on: [approve]
+    in:
+      number: ${workflow.in.subject.number}
+      verdict: ${steps.review.out.verdict}
+      review: ${steps.review.out.review}
+    run:
+      - |
+        echo "would post: a ${in.verdict} review on pull request #${in.number}:"
+        printf '%s\n' "${in.review}"
