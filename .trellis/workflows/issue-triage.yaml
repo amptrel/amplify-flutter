@@ -33,7 +33,7 @@ steps:
       - |
         gh issue comment "${in.number}" --repo "${in.repo}" --body "Hi @${in.author},
 
-        Thanks for opening this issue. We are triaging it now: we read the report, look for duplicates and existing fixes, check the Amplify Flutter source and docs for the cause, and try a quick reproduction when the issue allows it. We will reply here shortly with what we found, the next steps and the labels."
+        Thanks for opening this issue. I am triaging it now: I read the report, look for duplicates and existing fixes, check the Amplify Flutter source and docs for the cause, and try a quick reproduction when the issue allows it. I will reply here shortly with what I found, the next steps and the labels."
 
   - id: triage
     kind: agent
